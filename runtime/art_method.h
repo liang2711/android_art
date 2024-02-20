@@ -535,7 +535,7 @@ class ArtMethod FINAL {
     return MemberOffset(PtrSizedFieldsOffset(pointer_size) + OFFSETOF_MEMBER(
         PtrSizedFields, dex_cache_resolved_types_) / sizeof(void*) * pointer_size);
   }
-
+  //获得entry_point_from_jni_的值，它用于存储方法信息，在非jni方法里这个是没有用的
   static MemberOffset EntryPointFromJniOffset(size_t pointer_size) {
     return MemberOffset(PtrSizedFieldsOffset(pointer_size) + OFFSETOF_MEMBER(
         PtrSizedFields, entry_point_from_jni_) / sizeof(void*) * pointer_size);
@@ -591,6 +591,7 @@ class ArtMethod FINAL {
 
   ALWAYS_INLINE void SetEntryPointFromJniPtrSize(const void* entrypoint, size_t pointer_size) {
     DCHECK(Runtime::Current()->IsAotCompiler() || !IsXposedHookedMethod());
+    //EntryPointFromJniOffset获得entry_point_from_jni_
     SetNativePointer(EntryPointFromJniOffset(pointer_size), entrypoint, pointer_size);
   }
 
@@ -808,6 +809,7 @@ class ArtMethod FINAL {
 
     // Method dispatch from quick compiled code invokes this pointer which may cause bridging into
     // the interpreter.
+    //方法的入口地址
     void* entry_point_from_quick_compiled_code_;
   } ptr_sized_fields_;
 
