@@ -490,8 +490,12 @@ bool ArtMethod::HasAnyCompiledCode() {
 }
 
 void ArtMethod::CopyFrom(ArtMethod* src, size_t image_pointer_size) {
+  /**
+   *将src复制于this，大小是image_pointer_size（artmethod大小） 就是把hook函数的artmethod复制到新建的artmethod中
+  */
   memcpy(reinterpret_cast<void*>(this), reinterpret_cast<const void*>(src),
          Size(image_pointer_size));
+         //替换declaring_class字段，这个字段是存储的当前方法的类的对象
   declaring_class_ = GcRoot<mirror::Class>(const_cast<ArtMethod*>(src)->GetDeclaringClass());
 
   // If the entry point of the method we are copying from is from JIT code, we just
@@ -499,16 +503,20 @@ void ArtMethod::CopyFrom(ArtMethod* src, size_t image_pointer_size) {
   // to the JIT code, but this would require taking the JIT code cache lock to notify
   // it, which we do not want at this level.
   Runtime* runtime = Runtime::Current();
+  //当前运行时是否启用了 JIT 编译
   if (runtime->UseJitCompilation()) {
+    //检查当前的 JIT 代码缓存中是否包含当前方法的入口点（即已编译的本地机器代码）
     if (runtime->GetJit()->GetCodeCache()->ContainsPc(GetEntryPointFromQuickCompiledCode())) {
       SetEntryPointFromQuickCompiledCodePtrSize(GetQuickToInterpreterBridge(), image_pointer_size);
     }
   }
   // Clear the profiling info for the same reasons as the JIT code.
+  //检查当前方法是否为 Native 方法
   if (!src->IsNative()) {
     SetProfilingInfoPtrSize(nullptr, image_pointer_size);
   }
   // Clear hotness to let the JIT properly decide when to compile this method.
+  //热点数
   hotness_count_ = 0;
 }
 
@@ -551,6 +559,7 @@ static void StackReplaceMethodAndInstallInstrumentation(Thread* thread, void* ar
 }
 
 void ArtMethod::EnableXposedHook(ScopedObjectAccess& soa, jobject additional_info) {
+  //查看当前函数是否已经被hook了
   if (UNLIKELY(IsXposedHookedMethod())) {
     // Already hooked
     return;
@@ -561,24 +570,38 @@ void ArtMethod::EnableXposedHook(ScopedObjectAccess& soa, jobject additional_inf
   }
 
   // Create a backup of the ArtMethod object
+  //获得类连接器 classtable用来记录classloader已经加载的类
   auto* cl = Runtime::Current()->GetClassLinker();
+  //获取该类加载器的分配器 类似于malloc
   auto* linear_alloc = cl->GetAllocatorForClassLoader(GetClassLoader());
+  //使用linear_alloc分配内存创建一个新的artmethod
   ArtMethod* backup_method = cl->CreateRuntimeMethod(linear_alloc);
+  //cl->GetImagePointerSize()是获得imageheader类的pointer_size_，这是artmethod的统一大小（猜的）,
+  //this是当前hook的函数
   backup_method->CopyFrom(this, cl->GetImagePointerSize());
+  //设置复制的方法为fast_jin模式
   backup_method->SetAccessFlags(backup_method->GetAccessFlags() | kAccXposedOriginalMethod);
 
   // Create a Method/Constructor object for the backup ArtMethod object
+  //为备份ArtMethod对象创建方法/构造函数对象
+
+  //将artmethod强转为method，我们知道mirror里是对应着Java层的类
   mirror::AbstractMethod* reflected_method;
+  //是否为构造函数
   if (IsConstructor()) {
     reflected_method = mirror::Constructor::CreateFromArtMethod(soa.Self(), backup_method);
   } else {
     reflected_method = mirror::Method::CreateFromArtMethod(soa.Self(), backup_method);
   }
+  //设置函数的访问权限
   reflected_method->SetAccessible<false>(true);
 
   // Save extra information in a separate structure, stored instead of the native method
+  //hook_info是说明一个新的xposedhookinfo
   XposedHookInfo* hook_info = reinterpret_cast<XposedHookInfo*>(linear_alloc->Alloc(soa.Self(), sizeof(XposedHookInfo)));
+  //当被hook的函数复制品切已经转为jobject
   hook_info->reflected_method = soa.Vm()->AddGlobalRef(soa.Self(), reflected_method);
+  //被hook函数的信息，函数参数类型，函数返回类型，和回调函数
   hook_info->additional_info = soa.Env()->NewGlobalRef(additional_info);
   hook_info->original_method = backup_method;
 
@@ -591,16 +614,22 @@ void ArtMethod::EnableXposedHook(ScopedObjectAccess& soa, jobject additional_inf
 
   cl->InvalidateCallersForMethod(soa.Self(), this);
 
+  
   jit::Jit* jit = art::Runtime::Current()->GetJit();
   if (jit != nullptr) {
     jit->GetCodeCache()->MoveObsoleteMethod(this, backup_method);
   }
-
+  //将被hook的函数和hook_info换掉 [应该是把hook_info放入entry_point_from_jni_里]
   SetEntryPointFromJniPtrSize(reinterpret_cast<uint8_t*>(hook_info), sizeof(void*));
+  /*替换entry_point_from_quick_compiled_code
+  （猜想）替换为artQuickProxyInvokeHandler，而在这个方法中调用了InvokeXposedHandleHookedMethod
+     而InvokeXposedHandleHookedMethod就是调用了xposedbridge的handleHookedMethod这个方法就是被换的hook函数
+    跟到这里并没有发现当前被hook的函数设置为native方法，上面只有把一些方法的参数备份了一份放在entry_point_from_jni_里。
+  */
   SetEntryPointFromQuickCompiledCode(GetQuickProxyInvokeHandler());
   SetCodeItemOffset(0);
 
-  // Adjust access flags.
+  // Adjust access flags.调整回flags
   const uint32_t kRemoveFlags = kAccNative | kAccSynchronized | kAccAbstract | kAccDefault | kAccDefaultConflict;
   SetAccessFlags((GetAccessFlags() & ~kRemoveFlags) | kAccXposedHookedMethod);
 
