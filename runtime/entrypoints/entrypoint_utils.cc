@@ -276,6 +276,7 @@ JValue InvokeXposedHandleHookedMethod(ScopedObjectAccessAlreadyRunnable& soa, co
   invocation_args[2].l = hook_info->additional_info;
   invocation_args[3].l = rcvr_jobj;
   invocation_args[4].l = args_jobj;
+  //调用handleHookedMethod
   jobject result =
       soa.Env()->CallStaticObjectMethodA(ArtMethod::xposed_callback_class,
                                          ArtMethod::xposed_callback_method,
